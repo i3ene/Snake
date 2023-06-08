@@ -1,4 +1,5 @@
 ; 8051 Snake Game
+	EQU	ZUF8R, 0x20	;ein byte
 	CSEG	At	0H
 	jmp	init
 	ORG	100h
@@ -23,11 +24,11 @@
 
 ; Init Snake Values
 init:
-	MOV	R6, #11h	; SnakePos (XY)
+	MOV	R6, #21h	; SnakePos (XY)
 	MOV	R1, #01h	; SnakeDir
 	MOV	R2, #01h	; SnakeLen
 	MOV	R3, #18h	; SnakeMax
-	MOV	R4, #45h	; FoodPos (XY)
+	MOV	R4, #41h	; FoodPos (XY)
 	MOV	SP, #20h	; Move StackPointer out of variable space
 
 	MOV	A, R6		; Load first snake body part into array
@@ -37,10 +38,47 @@ init:
 
 ; Main Program
 loop:
+	ACALL	input_left
 	MOV	A, R1		; Load current direction
 	ACALL	move_left
 	ACALL	display
 	JMP	loop
+
+input_left:
+	MOV	A, P2		; Load input
+	XRL	A, #1h	; Mask input to first bit
+	; Check if equal
+	CJNE	A, #0FFh, input_up
+	MOV	R1, #0h		; Set direction left
+	RET
+
+input_up:
+	MOV	A, P2		; Load input
+	XRL	A, #2h	; Mask input to second bit
+	; Check if equal
+	CJNE	A, #0FFh, input_right
+	MOV	R1, #1h		; Set direction up
+	RET
+
+input_right:
+	MOV	A, P2		; Load input
+	XRL	A, #4h	; Mask input to third bit
+	; Check if equal
+	CJNE	A, #0FFh, input_down
+	MOV	R1, #2h		; Set direction right
+	RET
+
+input_down:
+	MOV	A, P2		; Load input
+	XRL	A, #8h	; Mask input to third bit
+	; Check if equal
+	CJNE	A, #0FFh, input_default
+	MOV	R1, #3h		; Set direction down
+	RET
+
+input_default:
+	; Do nothing, keep last direction
+	RET
 
 move_left:
 	CJNE	A, #00h, move_right
@@ -60,28 +98,133 @@ move_right:
 
 move_up:
 	CJNE	A, #02h, move_down
-	; Move Up
+	; Move Down
 	MOV	A, R6		; Load current position
-	ADD	A, #01h		; Add 1 to Y of pos
+	; Copy current pos
+	MOV	B, A
+	; Check if x position need to wrap
+	ADD	A, #01h		; Ad 1 to Y of pos
+	ANL	A, #0Fh		; Mask for only Y part
+	ANL	B, #0F0h	; Mask copied value for X value
+	ADD	A, B		; Add X and Y together
 	ACALL	move_execute
 	RET
 
 move_down:
 	; Move Down
 	MOV	A, R6		; Load current position
+	; Copy current pos
+	MOV	B, A
+	; Check if x position need to wrap
 	SUBB	A, #01h		; Remove 1 from Y of pos
+	ANL	A, #0Fh		; Mask for only Y part
+	ANL	B, #0F0h	; Mask copied value for X value
+	ADD	A, B		; Add X and Y together
 	ACALL	move_execute
 	RET
 
 move_execute:
 	; Check if snake is eating itself.
+	ACALL	wrap		; Check if wrapping needs to be done
 	; (Check if calculated pos is already in array)
-	MOV	R6, A		; Move calculated pos to R7
+	MOV	R6, A		; Move calculated pos to R6
+	ACALL	check_food	; Check if food is eaten
 	ACALL	check_loop
 	; Execute move step
 	INC	R0		; Increment address for first step
 	ACALL	move_array
 	RET
+
+check_food:
+	MOV	A, R6		; Load current pos
+	MOV	B, R4		; Load food pos
+	CLR	C		; Clear Carry
+	; Check if food and current pos are the same
+	SUBB	A, B
+	JZ	eat_food
+	RET
+
+eat_food:
+	INC	R2		; Increment snake length
+	ACALL	generate_food
+	RET
+
+generate_food:
+	; Random generate food pos
+	ACALL	ZUFALL
+	ACALL	wrap		; Wrap random pos to matrix
+	MOV	R4, A
+	ACALL	loop_food
+	RET
+
+loop_food:
+	; Check every entry
+	MOV	A, R7		; Load current entry index
+	ADD	A, #08h		; Register offset to array space
+	; Get position value of current index
+	MOV	R0, A		; Save address to register
+	MOV	A, @R0		; Load value from register
+	; Check if current pos equals loaded pos
+	SUBB	A, R4		; Subtract position values from each other
+	JZ	generate_food	; If A is 0, it is same position, so game over!
+	; Increment to next step
+	INC	R7		; Increment entry index
+	MOV	A, R7		; Load entry index
+	MOV	B, R2		; Load max SnakeLen
+	CJNE	A, B, check_food	; Check SnakeLen with current entry index
+	; Index is equal to SnakeLen, reset index
+	MOV	R7, #00h
+	; Get out of loop
+	RET
+
+; ------ Zufallszahlengenerator-----------------
+ZUFALL:	mov	A, ZUF8R	; initialisiere A mit ZUF8R
+	jnz	ZUB
+	cpl	A
+	mov	ZUF8R, A
+ZUB:	anl	a, #10111000b
+	mov	C, P
+	mov	A, ZUF8R
+	rlc	A
+	mov	ZUF8R, A
+	ret
+
+wrap:
+	; Check if position needs to wrap
+	ACALL	wrap_x
+	ACALL	wrap_y
+	RET
+
+wrap_y:
+	; Copy current pos
+	MOV	B, A
+	; Check if y position need to wrap
+	ANL	A, #0Fh		; Mask for only Y part
+	ANL	A, #7h		; Mask for max matrix size
+	ANL	B, #0F0h	; Mask copied value for X value
+	ADD	A, B		; Add X and Y together
+	RET
+
+wrap_x:
+	; Copy current pos
+	MOV	B, A
+	; Check if x position need to wrap
+	ANL	A, #0F0h	; Mask for only X part
+	; Bit shift by 4 to right
+	RRC	A
+	RRC	A
+	RRC	A
+	RRC	A
+	ANL	A, #7h		; Mask for max matrix size
+	; Bit shift by 4 to left
+	RLC	A
+	RLC	A
+	RLC	A
+	RLC	A
+	ANL	B, #0Fh		; Mask copied value for Y value
+	ADD	A, B		; Add X and Y together
+	RET
+
 
 check_loop:
 	; Check every entry
@@ -105,7 +248,7 @@ check_loop:
 
 game_over:
 	; Snake ate itself
-	; END
+	LJMP lose
 
 move_array:
 	; Move every body entry one step
@@ -113,7 +256,7 @@ move_array:
 	MOV	B, @R0		; Load current value from register
 	INC	R0		; Increment address
 	MOV	@R0, B		; Save loaded value to next/last address (move value in array one up)
-	ACALL	check_array	; Check if entry is out of bound
+	; ACALL	check_array	; Check if entry is out of bound
 	; Move to next address
 	DEC	R0		; Decrement address since we incremented it for write
 	MOV	A, R0		; Load current address
@@ -143,7 +286,7 @@ display:
 
 display_loop:
 	MOV	B, @R0		; Load current value
-	ACALL display_matrix	; Display current value
+	ACALL	display_matrix	; Display current value
 	INC	R0		; Increment current address
 	MOV	A, R0		; Load current address
 	SUBB	A, #08h		; Subtract array address offset
@@ -151,14 +294,14 @@ display_loop:
 	CJNE	A, B, display_loop	; Check if SnakeLen is reached
 
 	; Food display
-	MOV	B, R4	; Load FoodPos
-	ACALL display_matrix ; Display food
+	MOV	B, R4		; Load FoodPos
+	ACALL	display_matrix	; Display food
 	RET
 
 display_matrix:
 	MOV	P0, #0FFh	; Null X display
 	MOV	P1, #0FFh	; Null Y display
-	
+
 	MOV	A, B		; Load value
 	ANL	A, #0F0h	; Mask for only X part
 	; Bit shift by 4 to right
@@ -166,6 +309,7 @@ display_matrix:
 	RRC	A
 	RRC	A
 	RRC	A
+	ANL	A, #0Fh		; Mask for only Y part
 	; Map hex to matrix bit
 	ACALL	display_0
 	XRL	P0, A		; Add X part to P0
@@ -224,4 +368,5 @@ display_7:
 	MOV	A, #80h
 	RET
 
+lose:
 	END
